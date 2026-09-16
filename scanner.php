@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lector de credenciales QR</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  body {
+    margin: 0; min-height: 100vh;
+    background: #0f172a; color: #e2e8f0;
+    display: grid; grid-template-columns: 480px 1fr;
+    gap: 20px; padding: 20px;
+  }
+  @media (max-width: 1000px) { body { grid-template-columns: 1fr; } }
+
+  /* ---------- Panel izquierdo ---------- */
+  .panel {
+    background: #1e293b; border-radius: 14px; padding: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    height: fit-content;
+  }
+  .panel h1 { font-size: 1.15rem; margin: 0 0 12px; color: #f1f5f9; }
+
+  /* Selects superiores */
+  .mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .mode-field label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #94a3b8;
+    margin-bottom: 4px;
+  }
+  .mode-field select {
+    width: 100%;
+    padding: 10px 12px;
+    background: #0f172a;
+    color: #e2e8f0;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    outline: none;
+    cursor: pointer;
+  }
+  .mode-field select:focus { border-color: #5D1A99; }
+  .mode-field.tipo-clase select {
+    background: #5D1A99;
+    border-color: #7c2bc4;
+    color: #fff;
+    font-weight: 700;
+  }
+  .mode-field.tipo-clase select:focus { border-color: #a855f7; }
+
+  .cam-btn {
+    width: 100%; padding: 14px;
+    border: none; border-radius: 10px;
+    font-size: 1rem; font-weight: 700;
+    cursor: pointer; color: #fff;
+    background: #16a34a;
+    transition: background 0.15s, transform 0.08s;
+  }
+  .cam-btn:hover { background: #15803d; }
+  .cam-btn.active { background: #dc2626; }
+  .cam-btn.active:hover { background: #b91c1c; }
+  .cam-btn:active { transform: scale(0.98); }
+
+  #reader {
+    width: 100%; margin-top: 12px;
+    border-radius: 10px; overflow: hidden;
+    background: #0f172a; min-height: 60px;
+  }
+  #reader video { border-radius: 10px; }
+
+  /* Caja de estatus */
+  .status-box {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    color: #94a3b8;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+  }
+  .status-box .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #64748b; flex-shrink: 0;
+  }
+  .status-box.scanning .dot { background: #16a34a; animation: pulse 1.2s infinite; }
+  .status-box.processing .dot { background: #f59e0b; animation: pulse 0.5s infinite; }
+  .status-box.error .dot { background: #dc2626; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+  /* Subida */
+  .upload-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155; }
+  .upload-btn {
+    width: 100%; padding: 12px;
+    background: #0A47A1; color: #fff;
+    border: none; border-radius: 10px;
+    font-size: 0.95rem; font-weight: 700;
+    cursor: pointer;
+  }
+  .upload-btn:hover:not(:disabled) { background: #083a83; }
+  .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .stats {
+    margin-top: 10px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+    font-size: 0.78rem;
+    text-align: center;
+  }
+  .stat { background: #0f172a; padding: 8px 4px; border-radius: 8px; }
+  .stat b { display: block; font-size: 1.15rem; color: #fff; }
+  .stat span { color: #94a3b8; font-size: 0.7rem; }
+
+  .upload-info {
+    margin-top: 8px; font-size: 0.78rem;
+    color: #94a3b8; text-align: center;
+    min-height: 16px; word-break: break-word;
+  }
+  .upload-info.error { color: #f87171; }
+  .upload-info.ok { color: #4ade80; }
+  .upload-info a { color: #60a5fa; }
+
+  .drive-status {
+    margin-top: 10px; padding: 8px 12px;
+    background: #0f172a; border-radius: 8px;
+    font-size: 0.8rem; color: #94a3b8;
+    text-align: center;
+  }
+
+  /* ---------- Área derecha ---------- */
+  .results { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+
+  .result-card {
+    border-radius: 16px; padding: 22px 26px;
+    display: none;
+    animation: slideIn 0.25s ease-out;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.4);
+  }
+  .result-card.show { display: block; }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .result-card.success      { background: linear-gradient(135deg, #16a34a, #15803d); }
+  .result-card.warning      { background: linear-gradient(135deg, #f59e0b, #d97706); }
+  .result-card.participation{ background: linear-gradient(135deg, #0A47A1, #083a83); }
+  .result-card.error        { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+
+  .result-card .badge {
+    display: inline-block;
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.22);
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    color: #fff;
+  }
+  .result-card h2 {
+    margin: 0 0 10px;
+    font-size: 1.6rem;
+    font-weight: 900;
+    color: #fff;
+    letter-spacing: 0.3px;
+  }
+  .result-card .nombre {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fff;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .result-card .meta {
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.92);
+    display: flex; flex-wrap: wrap; gap: 16px;
+    margin-top: 4px;
+  }
+  .result-card .meta .field b { font-weight: 800; color: #fff; }
+  .result-card .puntos {
+    margin-top: 14px; padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.25);
+    font-size: 1.05rem; font-weight: 800; color: #fff;
+  }
+
+  /* Historial */
+  .history {
+    background: #1e293b; border-radius: 14px;
+    padding: 16px 18px; min-height: 200px;
+  }
+  .history h2 {
+    font-size: 0.95rem; margin: 0 0 12px;
+    color: #cbd5e1; text-transform: uppercase;
+    letter-spacing: 0.6px; font-weight: 700;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .history h2 button {
+    font-size: 0.72rem; padding: 4px 10px;
+    background: #334155; color: #cbd5e1;
+    border: none; border-radius: 6px; cursor: pointer;
+  }
+  .history h2 button:hover { background: #475569; }
+  .history ul { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; }
+  .history li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 8px;
+    border-bottom: 1px solid #334155;
+    font-size: 0.88rem;
+  }
+  .history li:last-child { border-bottom: none; }
+  .history .tipo {
+    width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 0.9rem; color: #fff; flex-shrink: 0;
+  }
+  .history .tipo.A { background: #16a34a; }
+  .history .tipo.P { background: #0A47A1; }
+  .history .info { flex: 1; min-width: 0; }
+  .history .info .n {
+    font-weight: 600; color: #e2e8f0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .history .info .d { font-size: 0.75rem; color: #94a3b8; }
+  .history .info .tc {
+    display: inline-block;
+    margin-top: 2px;
+    padding: 1px 6px;
+    background: #334155;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    color: #cbd5e1;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .history .pts { font-weight: 700; color: #fff; }
+  .history .empty { color: #64748b; text-align: center; padding: 24px; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h1>📷 Lector de credenciales</h1>
+
+  <div class="mode-row">
+    <div class="mode-field tipo-clase">
+      <label for="tipoClaseSelect">Tipo de clase</label>
+      <select id="tipoClaseSelect">
+        <option value="Teoría" selected>Teoría</option>
+        <option value="Laboratorio">Laboratorio</option>
+      </select>
+    </div>
+    <div class="mode-field">
+      <label for="filtroGrupoSelect">Filtrar por grupo</label>
+      <select id="filtroGrupoSelect">
+        <option value="">Todos</option>
+      </select>
+    </div>
+  </div>
+
+  <button class="cam-btn" id="camBtn">▶ Iniciar cámara</button>
+
+  <div id="reader"></div>
+
+  <div class="status-box" id="statusBox">
+    <span class="dot"></span>
+    <span id="statusText">Cámara detenida</span>
+  </div>
+
+  <div class="upload-section">
+    <button class="upload-btn" id="uploadBtn" disabled>☁ Subir registros a Drive</button>
+
+    <div class="stats">
+      <div class="stat"><b id="statA">0</b><span>ASISTENCIAS</span></div>
+      <div class="stat"><b id="statP">0</b><span>PARTICIP.</span></div>
+      <div class="stat"><b id="statPts">0</b><span>PUNTOS</span></div>
+    </div>
+
+    <div class="upload-info" id="uploadInfo">Sin registros locales</div>
+    <div class="drive-status" id="driveStatus">Cargando alumnos desde Drive…</div>
+  </div>
+</div>
+
+<div class="results">
+  <div class="result-card" id="resultCard">
+    <span class="badge" id="rBadge">—</span>
+    <h2 id="rTitle">—</h2>
+    <div class="nombre" id="rNombre">—</div>
+    <div class="meta" id="rMeta"></div>
+    <div class="puntos" id="rPuntos"></div>
+  </div>
+
+  <div class="history">
+    <h2>
+      Últimos escaneos
+      <button id="clearHistoryBtn">Limpiar</button>
+    </h2>
+    <ul id="historyList"></ul>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ============================================================
+  // CONFIGURACIÓN
+  // ============================================================
+  const API_URL = 'https://script.google.com/macros/s/AKfycbwmJQlppsZcemG70LnoUSp4_ZER6H9RX7FwzgczrXTJBTJqIG-ufakgXg_sE6WuMrc9ug/exec'; // ← tu URL
+  const STORAGE_KEY = 'qr_registros_v1';
+  const COOLDOWN_MS = 3000;
+  const RESULT_VISIBLE_MS = 3500;
+
+  // ============================================================
+  // REFERENCIAS
+  // ============================================================
+  const camBtn          = document.getElementById('camBtn');
+  const readerDiv       = document.getElementById('reader');
+  const statusBox       = document.getElementById('statusBox');
+  const statusText      = document.getElementById('statusText');
+  const uploadBtn       = document.getElementById('uploadBtn');
+  const uploadInfo      = document.getElementById('uploadInfo');
+  const driveStatus     = document.getElementById('driveStatus');
+  const statA           = document.getElementById('statA');
+  const statP           = document.getElementById('statP');
+  const statPts         = document.getElementById('statPts');
+  const resultCard      = document.getElementById('resultCard');
+  const rBadge          = document.getElementById('rBadge');
+  const rTitle          = document.getElementById('rTitle');
+  const rNombre         = document.getElementById('rNombre');
+  const rMeta           = document.getElementById('rMeta');
+  const rPuntos         = document.getElementById('rPuntos');
+  const historyList     = document.getElementById('historyList');
+  const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+  const tipoClaseSelect = document.getElementById('tipoClaseSelect');
+  const filtroGrupoSelect = document.getElementById('filtroGrupoSelect');
+
+  // ============================================================
+  // ESTADO
+  // ============================================================
+  let studentsByBoleta = new Map();
+  let scanner = null;
+  let scanning = false;
+  let lastScan = { text: '', time: 0 };
+  let processing = false;
+  let resultTimer = null;
+  let audioCtx = null;
+
+  // ============================================================
+  // UTILIDADES
+  // ============================================================
+  function hoy() {
+    const d = new Date();
+    return d.getFullYear() + '-' +
+      String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
+  function ahora() {
+    const d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' +
+           String(d.getMinutes()).padStart(2, '0') + ':' +
+           String(d.getSeconds()).padStart(2, '0');
+  }
+  function fmtHora(iso) { return iso.slice(0, 5); }
+
+  function beep(freq) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.frequency.value = freq || 880;
+      o.type = 'sine';
+      g.gain.setValueAtTime(0.001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+      o.start(); o.stop(audioCtx.currentTime + 0.26);
+    } catch (e) {}
+  }
+
+  // ============================================================
+  // PERSISTENCIA LOCAL
+  // ============================================================
+  function cargarRegistros() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) { return []; }
+  }
+  function guardarRegistros(regs) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(regs));
+  }
+
+  let registros = cargarRegistros();
+
+  function actualizarStats() {
+    const hoyStr = hoy();
+    const deHoy = registros.filter(r => r.fecha === hoyStr);
+    const asis = deHoy.filter(r => r.tipo === 'A').length;
+    const part = deHoy.filter(r => r.tipo === 'P').length;
+    const pts = part * 0.2;
+
+    statA.textContent = asis;
+    statP.textContent = part;
+    statPts.textContent = pts.toFixed(1);
+
+    uploadBtn.disabled = registros.length === 0;
+
+    const total = registros.length;
+    uploadInfo.classList.remove('error', 'ok');
+    if (!total) {
+      uploadInfo.textContent = 'Sin registros locales';
+    } else {
+      uploadInfo.textContent = `${total} registro(s) local(es) guardados`;
+    }
+  }
+
+  // ============================================================
+  // HISTORIAL
+  // ============================================================
+  function renderHistorial() {
+    const hoyStr = hoy();
+    const recientes = registros
+      .filter(r => r.fecha === hoyStr)
+      .slice(-50)
+      .reverse();
+
+    if (!recientes.length) {
+      historyList.innerHTML = '<li class="empty">Aún no hay escaneos hoy</li>';
+      return;
+    }
+
+    historyList.innerHTML = recientes.map(r => {
+      const puntosTxt = r.tipo === 'A' ? '—' : `+${r.valor}`;
+      const tc = r.tipo_clase || 'Teoría';
+      return `
+        <li>
+          <div class="tipo ${r.tipo}">${r.tipo}</div>
+          <div class="info">
+            <div class="n">${r.nombre || r.matricula}</div>
+            <div class="d">${fmtHora(r.hora)} · ${r.grupo || ''} · Boleta ${r.matricula}</div>
+            <span class="tc">${tc}</span>
+          </div>
+          <div class="pts">${puntosTxt}</div>
+        </li>
+      `;
+    }).join('');
+  }
+
+  // ============================================================
+  // CARGAR ALUMNOS DESDE DRIVE
+  // ============================================================
+  async function llamarAppsScript(fn, payload) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ fn, payload: payload || {} }),
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+    });
+    return res.json();
+  }
+
+  function parseCSV(text) {
+    const rows = [];
+    let row = [], field = '', inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i], n = text[i + 1];
+      if (inQ) {
+        if (c === '"') { if (n === '"') { field += '"'; i++; } else inQ = false; }
+        else field += c;
+      } else {
+        if (c === '"') inQ = true;
+        else if (c === ',') { row.push(field); field = ''; }
+        else if (c === '\n' || c === '\r') {
+          if (c === '\r' && n === '\n') i++;
+          row.push(field);
+          if (row.some(f => f.trim() !== '')) rows.push(row);
+          row = []; field = '';
+        } else field += c;
+      }
+    }
+    if (field || row.length) { row.push(field); if (row.some(f => f.trim() !== '')) rows.push(row); }
+    return rows;
+  }
+
+  function pickColumn(headers, candidates) {
+    for (const c of candidates) {
+      const idx = headers.findIndex(h => h.toLowerCase() === c.toLowerCase());
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
+
+  async function cargarAlumnos() {
+    driveStatus.textContent = 'Cargando alumnos desde Drive…';
+    try {
+      const res = await llamarAppsScript('obtenerAlumnos', {});
+      if (!res.ok) throw new Error(res.error);
+
+      const rows = parseCSV(res.csv);
+      if (rows.length < 2) throw new Error('CSV sin datos');
+
+      const headers = rows[0].map(h => h.trim());
+      const iBoleta = pickColumn(headers, ['matrícula', 'matricula', 'boleta']);
+      const iNombre = pickColumn(headers, ['nombre_completo', 'nombre', 'alumno']);
+      const iGrupo  = pickColumn(headers, ['grupo']);
+      const iCurso  = pickColumn(headers, ['unidad_aprendizaje', 'curso', 'materia', 'asignatura']);
+
+      if (iBoleta === -1 || iNombre === -1) throw new Error('Faltan columnas en el CSV');
+
+      studentsByBoleta.clear();
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const boleta = (row[iBoleta] || '').trim();
+        if (!boleta) continue;
+        studentsByBoleta.set(boleta, {
+          boleta,
+          nombre: (row[iNombre] || '').trim(),
+          grupo:  iGrupo  !== -1 ? (row[iGrupo]  || '').trim() : '',
+          curso:  iCurso  !== -1 ? (row[iCurso]  || '').trim() : ''
+        });
+      }
+
+      // Poblar select de filtro por grupo
+      const grupos = [...new Set(
+        [...studentsByBoleta.values()].map(s => s.grupo).filter(Boolean)
+      )].sort();
+
+      filtroGrupoSelect.innerHTML = '<option value="">Todos</option>';
+      grupos.forEach(g => {
+        const n = [...studentsByBoleta.values()].filter(s => s.grupo === g).length;
+        const opt = document.createElement('option');
+        opt.value = g;
+        opt.textContent = `${g} (${n})`;
+        filtroGrupoSelect.appendChild(opt);
+      });
+
+      driveStatus.textContent = `✓ ${studentsByBoleta.size} alumnos cargados · ${res.fileName}`;
+      driveStatus.style.color = '#4ade80';
+    } catch (err) {
+      driveStatus.textContent = '⚠ No se pudo cargar alumnos: ' + err.message;
+      driveStatus.style.color = '#f87171';
+    }
+  }
+
+  // ============================================================
+  // ESTATUS
+  // ============================================================
+  function setStatus(msg, cls) {
+    statusText.textContent = msg;
+    statusBox.classList.remove('scanning', 'processing', 'error');
+    if (cls) statusBox.classList.add(cls);
+  }
+
+  function mostrarTarjeta(estilo, badge, titulo, alumno, metaExtra, puntos) {
+    resultCard.classList.remove('success', 'warning', 'participation', 'error');
+    resultCard.classList.add(estilo);
+    rBadge.textContent = badge;
+    rTitle.textContent = titulo;
+    rNombre.textContent = alumno ? (alumno.nombre || alumno.boleta) : '—';
+
+    if (alumno) {
+      rMeta.innerHTML =
+        `<span class="field"><b>Boleta:</b> ${alumno.boleta || '—'}</span>` +
+        `<span class="field"><b>Grupo:</b> ${alumno.grupo || '—'}</span>` +
+        `<span class="field"><b>Curso:</b> ${alumno.curso || '—'}</span>` +
+        (metaExtra ? `<span class="field">${metaExtra}</span>` : '');
+    } else {
+      rMeta.innerHTML = metaExtra || '';
+    }
+
+    if (puntos) {
+      rPuntos.style.display = '';
+      rPuntos.textContent = puntos;
+    } else {
+      rPuntos.style.display = 'none';
+    }
+    resultCard.classList.add('show');
+
+    clearTimeout(resultTimer);
+    resultTimer = setTimeout(() => resultCard.classList.remove('show'), RESULT_VISIBLE_MS);
+  }
+
+  // ============================================================
+  // PARSEO DE QR
+  // ============================================================
+  function parseQR(text) {
+    text = text.trim();
+    const m = text.match(/^([0-9]+)([AP])$/);
+    if (!m) return null;
+    return { boleta: m[1], tipo: m[2] };
+  }
+
+  function procesarCodigo(text) {
+    const parsed = parseQR(text);
+    if (!parsed) {
+      setStatus('QR no reconocido: ' + text, 'error');
+      mostrarTarjeta('error', 'ERROR', 'Código no reconocido', null,
+        `<span class="field">Contenido: ${text}</span>`, '');
+      beep(300);
+      return;
+    }
+
+    const { boleta, tipo } = parsed;
+    const alumno = studentsByBoleta.get(boleta) || {
+      boleta, nombre: '(no en lista)', grupo: '', curso: ''
+    };
+
+    const tipoClase = tipoClaseSelect.value || 'Teoría';
+    const filtro = filtroGrupoSelect.value;
+
+    // ---------- Filtro por grupo ----------
+    if (filtro && alumno.grupo !== filtro) {
+      setStatus(`Alumno del grupo ${alumno.grupo || '—'} ignorado (filtro: ${filtro})`);
+      mostrarTarjeta('warning', 'FUERA DE FILTRO', 'Alumno fuera del filtro',
+        { boleta, nombre: alumno.nombre, grupo: alumno.grupo, curso: alumno.curso },
+        `<span class="field"><b>Filtro activo:</b> ${filtro}</span>` +
+        `<span class="field"><b>Tipo:</b> ${tipoClase}</span>`,
+        '');
+      beep(400);
+      return;
+    }
+
+    const fecha = hoy();
+    const hora = ahora();
+
+    // ---------- ASISTENCIA ----------
+    if (tipo === 'A') {
+      const yaExiste = registros.some(r =>
+        r.fecha === fecha &&
+        r.matricula === boleta &&
+        r.tipo === 'A' &&
+        (r.tipo_clase || 'Teoría') === tipoClase
+      );
+
+      if (yaExiste) {
+        const prev = registros.find(r =>
+          r.fecha === fecha && r.matricula === boleta &&
+          r.tipo === 'A' && (r.tipo_clase || 'Teoría') === tipoClase
+        );
+        setStatus(`Asistencia ya registrada hoy (${tipoClase}) a las ${fmtHora(prev.hora)}`);
+        mostrarTarjeta('warning', 'YA PRESENTADA', 'Asistencia ya registrada',
+          { boleta, nombre: alumno.nombre, grupo: alumno.grupo, curso: alumno.curso },
+          `<span class="field"><b>Tipo:</b> ${tipoClase}</span>` +
+          `<span class="field"><b>Hora previa:</b> ${fmtHora(prev.hora)}</span>`,
+          '');
+        beep(500);
+        return;
+      }
+
+      const reg = {
+        fecha, hora,
+        matricula: boleta,
+        nombre: alumno.nombre,
+        grupo: alumno.grupo,
+        curso: alumno.curso,
+        tipo_clase: tipoClase,
+        tipo: 'A',
+        valor: 0
+      };
+      registros.push(reg);
+      guardarRegistros(registros);
+      actualizarStats();
+      renderHistorial();
+
+      setStatus(`✓ Asistencia (${tipoClase}) registrada: ${alumno.nombre}`);
+      mostrarTarjeta('success', 'ASISTENCIA', 'Asistencia registrada',
+        { boleta, nombre: alumno.nombre, grupo: alumno.grupo, curso: alumno.curso },
+        `<span class="field"><b>Tipo:</b> ${tipoClase}</span>` +
+        `<span class="field"><b>Fecha:</b> ${fecha}</span>` +
+        `<span class="field"><b>Hora:</b> ${hora}</span>`,
+        '');
+      beep(1046);
+      return;
+    }
+
+    // ---------- PARTICIPACIÓN ----------
+    if (tipo === 'P') {
+      const previasHoy = registros.filter(r =>
+        r.fecha === fecha && r.matricula === boleta &&
+        r.tipo === 'P' && (r.tipo_clase || 'Teoría') === tipoClase
+      );
+      const num = previasHoy.length + 1;
+
+      const reg = {
+        fecha, hora,
+        matricula: boleta,
+        nombre: alumno.nombre,
+        grupo: alumno.grupo,
+        curso: alumno.curso,
+        tipo_clase: tipoClase,
+        tipo: 'P',
+        valor: 0.2
+      };
+      registros.push(reg);
+      guardarRegistros(registros);
+      actualizarStats();
+      renderHistorial();
+
+      const ordinal = num === 1 ? 'primera' :
+                      num === 2 ? 'segunda' :
+                      num === 3 ? 'tercera' :
+                      num + 'ª';
+      const totalPtsHoy = (previasHoy.length + 1) * 0.2;
+
+      setStatus(`✓ Participación ${ordinal} (${tipoClase}) vez: ${alumno.nombre} (+0.2)`);
+      mostrarTarjeta('participation', 'PARTICIPACIÓN', `Participación ${ordinal} vez`,
+        { boleta, nombre: alumno.nombre, grupo: alumno.grupo, curso: alumno.curso },
+        `<span class="field"><b>Tipo:</b> ${tipoClase}</span>` +
+        `<span class="field"><b>Hora:</b> ${hora}</span>` +
+        `<span class="field"><b>Veces hoy (${tipoClase}):</b> ${num}</span>`,
+        `+0.2 puntos · Total hoy: ${totalPtsHoy.toFixed(1)} pts`);
+      beep(1318);
+      return;
+    }
+  }
+
+  // ============================================================
+  // CÁMARA
+  // ============================================================
+  async function iniciarCamara() {
+    try {
+      setStatus('Iniciando cámara…');
+      scanner = new Html5Qrcode('reader');
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => onScanSuccess(decodedText),
+        () => {}
+      );
+      scanning = true;
+      camBtn.textContent = '■ Detener cámara';
+      camBtn.classList.add('active');
+      setStatus(`Buscando códigos QR · ${tipoClaseSelect.value}`, 'scanning');
+    } catch (err) {
+      console.error(err);
+      setStatus('Error al iniciar cámara: ' + err.message, 'error');
+      scanning = false;
+      camBtn.textContent = '▶ Iniciar cámara';
+      camBtn.classList.remove('active');
+    }
+  }
+
+  async function detenerCamara() {
+    if (!scanner) return;
+    try { await scanner.stop(); await scanner.clear(); } catch (e) {}
+    scanner = null;
+    scanning = false;
+    camBtn.textContent = '▶ Iniciar cámara';
+    camBtn.classList.remove('active');
+    setStatus('Cámara detenida');
+  }
+
+  camBtn.addEventListener('click', () => {
+    if (scanning) detenerCamara();
+    else iniciarCamara();
+  });
+
+  // Al cambiar de tipo de clase o filtro, actualizar el estatus si está escaneando
+  tipoClaseSelect.addEventListener('change', () => {
+    if (scanning && !processing) {
+      setStatus(`Buscando códigos QR · ${tipoClaseSelect.value}`, 'scanning');
+    }
+  });
+  filtroGrupoSelect.addEventListener('change', () => {
+    if (scanning && !processing) {
+      const f = filtroGrupoSelect.value;
+      setStatus(`Buscando códigos QR · ${tipoClaseSelect.value}${f ? ' · ' + f : ''}`, 'scanning');
+    }
+  });
+
+  // ============================================================
+  // MANEJO DE ESCANEO
+  // ============================================================
+  function onScanSuccess(text) {
+    const now = Date.now();
+    if (processing) return;
+    if (text === lastScan.text && now - lastScan.time < COOLDOWN_MS) return;
+
+    lastScan = { text, time: now };
+    processing = true;
+    setStatus('Procesando…', 'processing');
+
+    try {
+      procesarCodigo(text);
+    } catch (err) {
+      console.error(err);
+      setStatus('Error al procesar: ' + err.message, 'error');
+    } finally {
+      setTimeout(() => {
+        processing = false;
+        if (scanning) {
+          const f = filtroGrupoSelect.value;
+          setStatus(`Buscando códigos QR · ${tipoClaseSelect.value}${f ? ' · ' + f : ''}`, 'scanning');
+        }
+      }, 800);
+    }
+  }
+
+  // ============================================================
+  // SUBIR REGISTROS A DRIVE
+  // ============================================================
+  uploadBtn.addEventListener('click', async () => {
+    if (!registros.length) return;
+
+    uploadBtn.disabled = true;
+    const textoOriginal = uploadBtn.textContent;
+    uploadBtn.textContent = 'Subiendo…';
+    uploadInfo.classList.remove('error', 'ok');
+    uploadInfo.textContent = `Enviando ${registros.length} registros…`;
+
+    try {
+      const res = await llamarAppsScript('subirRegistro', { registros });
+      if (!res.ok) throw new Error(res.error);
+
+      uploadInfo.classList.add('ok');
+      uploadInfo.innerHTML =
+        `✓ ${res.agregados} nuevos · ${res.total} totales en Drive` +
+        (res.url ? ` · <a href="${res.url}" target="_blank">abrir CSV</a>` : '');
+    } catch (err) {
+      console.error(err);
+      uploadInfo.classList.add('error');
+      uploadInfo.textContent = '✗ ' + err.message;
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = textoOriginal;
+    }
+  });
+
+  // ============================================================
+  // LIMPIAR HISTORIAL
+  // ============================================================
+  clearHistoryBtn.addEventListener('click', () => {
+    if (!confirm('¿Borrar todos los registros locales? Asegúrate de haber subido a Drive primero.')) return;
+    registros = [];
+    guardarRegistros(registros);
+    actualizarStats();
+    renderHistorial();
+    uploadInfo.textContent = 'Registros locales borrados';
+  });
+
+  // ============================================================
+  // INIT
+  // ============================================================
+  actualizarStats();
+  renderHistorial();
+  cargarAlumnos();
+})();
+</script>
+</body>
+</html>
