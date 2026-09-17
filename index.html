@@ -295,6 +295,17 @@
 
     <div class="upload-info" id="uploadInfo">Sin registros locales</div>
     <div class="drive-status" id="driveStatus">Cargando alumnos desde Drive…</div>
+
+<!-- Fallback: carga manual de CSV si Drive falla -->
+<div id="fallbackUpload" style="display:none; margin-top:10px;">
+  <label for="csvFallbackInput" class="upload-btn" style="background:#f59e0b; display:block; text-align:center; cursor:pointer;">
+    📂 Cargar CSV manualmente
+  </label>
+  <input type="file" id="csvFallbackInput" accept=".csv" hidden>
+  <div class="upload-info" id="fallbackInfo" style="margin-top:6px;"></div>
+</div>
+
+
   </div>
 </div>
 
@@ -321,34 +332,37 @@
   // ============================================================
   // CONFIGURACIÓN
   // ============================================================
-  const API_URL = 'https://script.google.com/macros/s/AKfycbwmJQlppsZcemG70LnoUSp4_ZER6H9RX7FwzgczrXTJBTJqIG-ufakgXg_sE6WuMrc9ug/exec'; // ← tu URL
+  const API_URL = 'https://script.google.com/macros/s/AKfy.../exec'; // ← tu URL
   const STORAGE_KEY = 'qr_registros_v1';
   const COOLDOWN_MS = 3000;
   const RESULT_VISIBLE_MS = 3500;
+  const DRIVE_TIMEOUT_MS = 12000;  // si Drive tarda más, ofrecer fallback
 
   // ============================================================
   // REFERENCIAS
   // ============================================================
-  const camBtn          = document.getElementById('camBtn');
-  const readerDiv       = document.getElementById('reader');
-  const statusBox       = document.getElementById('statusBox');
-  const statusText      = document.getElementById('statusText');
-  const uploadBtn       = document.getElementById('uploadBtn');
-  const uploadInfo      = document.getElementById('uploadInfo');
-  const driveStatus     = document.getElementById('driveStatus');
-  const statA           = document.getElementById('statA');
-  const statP           = document.getElementById('statP');
-  const statPts         = document.getElementById('statPts');
-  const resultCard      = document.getElementById('resultCard');
-  const rBadge          = document.getElementById('rBadge');
-  const rTitle          = document.getElementById('rTitle');
-  const rNombre         = document.getElementById('rNombre');
-  const rMeta           = document.getElementById('rMeta');
-  const rPuntos         = document.getElementById('rPuntos');
-  const historyList     = document.getElementById('historyList');
-  const clearHistoryBtn = document.getElementById('clearHistoryBtn');
-  const tipoClaseSelect = document.getElementById('tipoClaseSelect');
+  const camBtn            = document.getElementById('camBtn');
+  const statusBox         = document.getElementById('statusBox');
+  const statusText        = document.getElementById('statusText');
+  const uploadBtn         = document.getElementById('uploadBtn');
+  const uploadInfo        = document.getElementById('uploadInfo');
+  const driveStatus       = document.getElementById('driveStatus');
+  const statA             = document.getElementById('statA');
+  const statP             = document.getElementById('statP');
+  const statPts           = document.getElementById('statPts');
+  const resultCard        = document.getElementById('resultCard');
+  const rBadge            = document.getElementById('rBadge');
+  const rTitle            = document.getElementById('rTitle');
+  const rNombre           = document.getElementById('rNombre');
+  const rMeta             = document.getElementById('rMeta');
+  const rPuntos           = document.getElementById('rPuntos');
+  const historyList       = document.getElementById('historyList');
+  const clearHistoryBtn   = document.getElementById('clearHistoryBtn');
+  const tipoClaseSelect   = document.getElementById('tipoClaseSelect');
   const filtroGrupoSelect = document.getElementById('filtroGrupoSelect');
+  const fallbackUpload    = document.getElementById('fallbackUpload');
+  const csvFallbackInput  = document.getElementById('csvFallbackInput');
+  const fallbackInfo      = document.getElementById('fallbackInfo');
 
   // ============================================================
   // ESTADO
@@ -360,6 +374,7 @@
   let processing = false;
   let resultTimer = null;
   let audioCtx = null;
+  let alumnosCargados = false;
 
   // ============================================================
   // UTILIDADES
@@ -463,17 +478,8 @@
   }
 
   // ============================================================
-  // CARGAR ALUMNOS DESDE DRIVE
+  // PARSEO CSV Y CARGA DE ALUMNOS
   // ============================================================
-  async function llamarAppsScript(fn, payload) {
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      body: JSON.stringify({ fn, payload: payload || {} }),
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }
-    });
-    return res.json();
-  }
-
   function parseCSV(text) {
     const rows = [];
     let row = [], field = '', inQ = false;
@@ -505,57 +511,134 @@
     return -1;
   }
 
+  /**
+   * Aplica un CSV (texto) al mapa de alumnos y actualiza la UI.
+   * Retorna { ok, count } o lanza error.
+   */
+  function aplicarCSV(csvText, fuente) {
+    const rows = parseCSV(csvText);
+    if (rows.length < 2) throw new Error('CSV sin datos');
+
+    const headers = rows[0].map(h => h.trim());
+    const iBoleta = pickColumn(headers, ['matrícula', 'matricula', 'boleta']);
+    const iNombre = pickColumn(headers, ['nombre_completo', 'nombre', 'alumno']);
+    const iGrupo  = pickColumn(headers, ['grupo']);
+    const iCurso  = pickColumn(headers, ['unidad_aprendizaje', 'curso', 'materia', 'asignatura']);
+
+    if (iBoleta === -1 || iNombre === -1) throw new Error('Faltan columnas en el CSV');
+
+    studentsByBoleta.clear();
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      const boleta = (row[iBoleta] || '').trim();
+      if (!boleta) continue;
+      studentsByBoleta.set(boleta, {
+        boleta,
+        nombre: (row[iNombre] || '').trim(),
+        grupo:  iGrupo  !== -1 ? (row[iGrupo]  || '').trim() : '',
+        curso:  iCurso  !== -1 ? (row[iCurso]  || '').trim() : ''
+      });
+    }
+
+    // Poblar select de filtro por grupo
+    const grupos = [...new Set(
+      [...studentsByBoleta.values()].map(s => s.grupo).filter(Boolean)
+    )].sort();
+
+    const filtroActual = filtroGrupoSelect.value;
+    filtroGrupoSelect.innerHTML = '<option value="">Todos</option>';
+    grupos.forEach(g => {
+      const n = [...studentsByBoleta.values()].filter(s => s.grupo === g).length;
+      const opt = document.createElement('option');
+      opt.value = g;
+      opt.textContent = `${g} (${n})`;
+      filtroGrupoSelect.appendChild(opt);
+    });
+    // Conservar filtro previo si sigue existiendo
+    if (filtroActual && grupos.includes(filtroActual)) {
+      filtroGrupoSelect.value = filtroActual;
+    }
+
+    alumnosCargados = true;
+    return { ok: true, count: studentsByBoleta.size, fuente };
+  }
+
+  async function llamarAppsScript(fn, payload) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ fn, payload: payload || {} }),
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+    });
+    return res.json();
+  }
+
   async function cargarAlumnos() {
     driveStatus.textContent = 'Cargando alumnos desde Drive…';
+    driveStatus.style.color = '#94a3b8';
+    fallbackUpload.style.display = 'none';
+    fallbackInfo.textContent = '';
+
     try {
-      const res = await llamarAppsScript('obtenerAlumnos', {});
+      // Timeout manual por si Drive no responde
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Tiempo de espera agotado')), DRIVE_TIMEOUT_MS)
+      );
+      const res = await Promise.race([
+        llamarAppsScript('obtenerAlumnos', {}),
+        timeoutPromise
+      ]);
+
       if (!res.ok) throw new Error(res.error);
 
-      const rows = parseCSV(res.csv);
-      if (rows.length < 2) throw new Error('CSV sin datos');
-
-      const headers = rows[0].map(h => h.trim());
-      const iBoleta = pickColumn(headers, ['matrícula', 'matricula', 'boleta']);
-      const iNombre = pickColumn(headers, ['nombre_completo', 'nombre', 'alumno']);
-      const iGrupo  = pickColumn(headers, ['grupo']);
-      const iCurso  = pickColumn(headers, ['unidad_aprendizaje', 'curso', 'materia', 'asignatura']);
-
-      if (iBoleta === -1 || iNombre === -1) throw new Error('Faltan columnas en el CSV');
-
-      studentsByBoleta.clear();
-      for (let r = 1; r < rows.length; r++) {
-        const row = rows[r];
-        const boleta = (row[iBoleta] || '').trim();
-        if (!boleta) continue;
-        studentsByBoleta.set(boleta, {
-          boleta,
-          nombre: (row[iNombre] || '').trim(),
-          grupo:  iGrupo  !== -1 ? (row[iGrupo]  || '').trim() : '',
-          curso:  iCurso  !== -1 ? (row[iCurso]  || '').trim() : ''
-        });
-      }
-
-      // Poblar select de filtro por grupo
-      const grupos = [...new Set(
-        [...studentsByBoleta.values()].map(s => s.grupo).filter(Boolean)
-      )].sort();
-
-      filtroGrupoSelect.innerHTML = '<option value="">Todos</option>';
-      grupos.forEach(g => {
-        const n = [...studentsByBoleta.values()].filter(s => s.grupo === g).length;
-        const opt = document.createElement('option');
-        opt.value = g;
-        opt.textContent = `${g} (${n})`;
-        filtroGrupoSelect.appendChild(opt);
-      });
-
-      driveStatus.textContent = `✓ ${studentsByBoleta.size} alumnos cargados · ${res.fileName}`;
+      const info = aplicarCSV(res.csv, 'Drive');
+      driveStatus.textContent = `✓ ${info.count} alumnos cargados · ${res.fileName}`;
       driveStatus.style.color = '#4ade80';
+      fallbackUpload.style.display = 'none';
+
     } catch (err) {
-      driveStatus.textContent = '⚠ No se pudo cargar alumnos: ' + err.message;
+      driveStatus.textContent = '⚠ No se pudo cargar alumnos desde Drive: ' + err.message;
       driveStatus.style.color = '#f87171';
+      fallbackUpload.style.display = 'block';
+      fallbackInfo.classList.remove('error', 'ok');
+      fallbackInfo.textContent = 'Usa el botón para cargar el CSV manualmente.';
     }
   }
+
+  // ============================================================
+  // FALLBACK: CARGAR CSV MANUALMENTE
+  // ============================================================
+  csvFallbackInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    fallbackInfo.classList.remove('error', 'ok');
+    fallbackInfo.textContent = 'Leyendo archivo…';
+
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try {
+        const info = aplicarCSV(evt.target.result, file.name);
+        driveStatus.textContent = `✓ ${info.count} alumnos cargados · ${file.name} (manual)`;
+        driveStatus.style.color = '#4ade80';
+        fallbackInfo.classList.add('ok');
+        fallbackInfo.textContent = `Cargado: ${file.name}`;
+        // Ocultar después de un momento
+        setTimeout(() => { fallbackUpload.style.display = 'none'; }, 1500);
+      } catch (err) {
+        console.error(err);
+        fallbackInfo.classList.add('error');
+        fallbackInfo.textContent = '✗ ' + err.message;
+      }
+      // Resetear input para permitir volver a cargar el mismo archivo
+      csvFallbackInput.value = '';
+    };
+    reader.onerror = () => {
+      fallbackInfo.classList.add('error');
+      fallbackInfo.textContent = '✗ No se pudo leer el archivo';
+      csvFallbackInput.value = '';
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
 
   // ============================================================
   // ESTATUS
@@ -596,7 +679,7 @@
   }
 
   // ============================================================
-  // PARSEO DE QR
+  // PARSEO DE QR Y PROCESAMIENTO
   // ============================================================
   function parseQR(text) {
     text = text.trim();
@@ -606,6 +689,14 @@
   }
 
   function procesarCodigo(text) {
+    if (!alumnosCargados) {
+      setStatus('Alumnos no cargados. Carga el CSV primero.', 'error');
+      mostrarTarjeta('error', 'SIN DATOS', 'Carga el CSV de alumnos', null,
+        '<span class="field">Usa el botón "Cargar CSV manualmente" o recarga la página.</span>', '');
+      beep(300);
+      return;
+    }
+
     const parsed = parseQR(text);
     if (!parsed) {
       setStatus('QR no reconocido: ' + text, 'error');
@@ -623,7 +714,6 @@
     const tipoClase = tipoClaseSelect.value || 'Teoría';
     const filtro = filtroGrupoSelect.value;
 
-    // ---------- Filtro por grupo ----------
     if (filtro && alumno.grupo !== filtro) {
       setStatus(`Alumno del grupo ${alumno.grupo || '—'} ignorado (filtro: ${filtro})`);
       mostrarTarjeta('warning', 'FUERA DE FILTRO', 'Alumno fuera del filtro',
@@ -733,6 +823,10 @@
   // CÁMARA
   // ============================================================
   async function iniciarCamara() {
+    if (!alumnosCargados) {
+      setStatus('Carga primero el CSV de alumnos', 'error');
+      return;
+    }
     try {
       setStatus('Iniciando cámara…');
       scanner = new Html5Qrcode('reader');
@@ -770,7 +864,6 @@
     else iniciarCamara();
   });
 
-  // Al cambiar de tipo de clase o filtro, actualizar el estatus si está escaneando
   tipoClaseSelect.addEventListener('change', () => {
     if (scanning && !processing) {
       setStatus(`Buscando códigos QR · ${tipoClaseSelect.value}`, 'scanning');
