@@ -252,6 +252,49 @@
   }
   .history .pts { font-weight: 700; color: #fff; }
   .history .empty { color: #64748b; text-align: center; padding: 24px; font-size: 0.85rem; }
+
+
+ /* Fila de opciones Valor + Evaluación */
+.option-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+.option-row .mode-field { flex: 1; margin: 0; }
+
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.check-label input[type="checkbox"] {
+  accent-color: #f59e0b;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.check-label:hover { border-color: #64748b; }
+.check-label:has(input:checked) {
+  border-color: #f59e0b;
+  color: #fbbf24;
+  background: #1c1508;
+}
+
+/* Chip E en el historial */
+.history .tipo.E { background: #ea580c; }
+
+ 
 </style>
 </head>
 <body>
@@ -287,6 +330,29 @@
   <div class="upload-section">
     <button class="upload-btn" id="uploadBtn" disabled>☁ Subir registros a Drive</button>
 
+   <!-- Valor de la participación/evaluación -->
+<div class="option-row">
+  <div class="mode-field">
+    <label for="valorSelect">Valor</label>
+    <select id="valorSelect">
+      <option value="10" selected>10</option>
+      <option value="9">9</option>
+      <option value="8">8</option>
+      <option value="7">7</option>
+      <option value="6">6</option>
+      <option value="5">5</option>
+      <option value="4">4</option>
+      <option value="3">3</option>
+      <option value="2">2</option>
+      <option value="1">1</option>
+    </select>
+  </div>
+  <label class="check-label" for="esEvaluacion">
+    <input type="checkbox" id="esEvaluacion">
+    Evaluación
+  </label>
+</div>
+   
     <div class="stats">
       <div class="stat"><b id="statA">0</b><span>ASISTENCIAS</span></div>
       <div class="stat"><b id="statP">0</b><span>PARTICIP.</span></div>
@@ -336,7 +402,7 @@
   const STORAGE_KEY = 'qr_registros_v1';
   const COOLDOWN_MS = 3000;
   const RESULT_VISIBLE_MS = 3500;
-  const DRIVE_TIMEOUT_MS = 12000;  // si Drive tarda más, ofrecer fallback
+  const DRIVE_TIMEOUT_MS = 12000;
 
   // ============================================================
   // REFERENCIAS
@@ -363,6 +429,8 @@
   const fallbackUpload    = document.getElementById('fallbackUpload');
   const csvFallbackInput  = document.getElementById('csvFallbackInput');
   const fallbackInfo      = document.getElementById('fallbackInfo');
+  const valorSelect       = document.getElementById('valorSelect');
+  const esEvaluacion      = document.getElementById('esEvaluacion');
 
   // ============================================================
   // ESTADO
@@ -428,21 +496,23 @@
     const deHoy = registros.filter(r => r.fecha === hoyStr);
     const asis = deHoy.filter(r => r.tipo === 'A').length;
     const part = deHoy.filter(r => r.tipo === 'P').length;
-    const pts = part * 0.2;
+    const evalCount = deHoy.filter(r => r.tipo === 'E').length;
+    // Suma de los valores de participaciones y evaluaciones
+    const pts = deHoy
+      .filter(r => r.tipo === 'P' || r.tipo === 'E')
+      .reduce((s, r) => s + (Number(r.valor) || 0), 0);
 
     statA.textContent = asis;
-    statP.textContent = part;
-    statPts.textContent = pts.toFixed(1);
+    statP.textContent = part + evalCount;
+    statPts.textContent = pts.toString();
 
     uploadBtn.disabled = registros.length === 0;
 
     const total = registros.length;
     uploadInfo.classList.remove('error', 'ok');
-    if (!total) {
-      uploadInfo.textContent = 'Sin registros locales';
-    } else {
-      uploadInfo.textContent = `${total} registro(s) local(es) guardados`;
-    }
+    uploadInfo.textContent = total
+      ? `${total} registro(s) local(es) guardados`
+      : 'Sin registros locales';
   }
 
   // ============================================================
@@ -461,7 +531,8 @@
     }
 
     historyList.innerHTML = recientes.map(r => {
-      const puntosTxt = r.tipo === 'A' ? '—' : `+${r.valor}`;
+      const esParticipacion = (r.tipo === 'P' || r.tipo === 'E');
+      const puntosTxt = esParticipacion ? `+${r.valor}` : '—';
       const tc = r.tipo_clase || 'Teoría';
       return `
         <li>
@@ -511,10 +582,6 @@
     return -1;
   }
 
-  /**
-   * Aplica un CSV (texto) al mapa de alumnos y actualiza la UI.
-   * Retorna { ok, count } o lanza error.
-   */
   function aplicarCSV(csvText, fuente) {
     const rows = parseCSV(csvText);
     if (rows.length < 2) throw new Error('CSV sin datos');
@@ -540,7 +607,6 @@
       });
     }
 
-    // Poblar select de filtro por grupo
     const grupos = [...new Set(
       [...studentsByBoleta.values()].map(s => s.grupo).filter(Boolean)
     )].sort();
@@ -554,7 +620,6 @@
       opt.textContent = `${g} (${n})`;
       filtroGrupoSelect.appendChild(opt);
     });
-    // Conservar filtro previo si sigue existiendo
     if (filtroActual && grupos.includes(filtroActual)) {
       filtroGrupoSelect.value = filtroActual;
     }
@@ -579,7 +644,6 @@
     fallbackInfo.textContent = '';
 
     try {
-      // Timeout manual por si Drive no responde
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Tiempo de espera agotado')), DRIVE_TIMEOUT_MS)
       );
@@ -622,14 +686,12 @@
         driveStatus.style.color = '#4ade80';
         fallbackInfo.classList.add('ok');
         fallbackInfo.textContent = `Cargado: ${file.name}`;
-        // Ocultar después de un momento
         setTimeout(() => { fallbackUpload.style.display = 'none'; }, 1500);
       } catch (err) {
         console.error(err);
         fallbackInfo.classList.add('error');
         fallbackInfo.textContent = '✗ ' + err.message;
       }
-      // Resetear input para permitir volver a cargar el mismo archivo
       csvFallbackInput.value = '';
     };
     reader.onerror = () => {
@@ -641,7 +703,7 @@
   });
 
   // ============================================================
-  // ESTATUS
+  // ESTATUS Y TARJETA
   // ============================================================
   function setStatus(msg, cls) {
     statusText.textContent = msg;
@@ -778,11 +840,16 @@
       return;
     }
 
-    // ---------- PARTICIPACIÓN ----------
+    // ---------- PARTICIPACIÓN / EVALUACIÓN ----------
     if (tipo === 'P') {
+      const esEval = esEvaluacion.checked;
+      const tipoFinal = esEval ? 'E' : 'P';
+      const valor = Number(valorSelect.value) || 10;
+      const etiqueta = esEval ? 'Evaluación' : 'Participación';
+
       const previasHoy = registros.filter(r =>
         r.fecha === fecha && r.matricula === boleta &&
-        r.tipo === 'P' && (r.tipo_clase || 'Teoría') === tipoClase
+        r.tipo === tipoFinal && (r.tipo_clase || 'Teoría') === tipoClase
       );
       const num = previasHoy.length + 1;
 
@@ -793,8 +860,8 @@
         grupo: alumno.grupo,
         curso: alumno.curso,
         tipo_clase: tipoClase,
-        tipo: 'P',
-        valor: 0.2
+        tipo: tipoFinal,
+        valor: valor
       };
       registros.push(reg);
       guardarRegistros(registros);
@@ -805,16 +872,20 @@
                       num === 2 ? 'segunda' :
                       num === 3 ? 'tercera' :
                       num + 'ª';
-      const totalPtsHoy = (previasHoy.length + 1) * 0.2;
+      const totalPtsHoy = previasHoy.reduce((s, r) => s + (Number(r.valor) || 0), 0) + valor;
 
-      setStatus(`✓ Participación ${ordinal} (${tipoClase}) vez: ${alumno.nombre} (+0.2)`);
-      mostrarTarjeta('participation', 'PARTICIPACIÓN', `Participación ${ordinal} vez`,
+      setStatus(`✓ ${etiqueta} ${ordinal} (${tipoClase}) vez: ${alumno.nombre} (+${valor})`);
+      mostrarTarjeta(
+        esEval ? 'warning' : 'participation',
+        etiqueta.toUpperCase(),
+        `${etiqueta} ${ordinal} vez`,
         { boleta, nombre: alumno.nombre, grupo: alumno.grupo, curso: alumno.curso },
         `<span class="field"><b>Tipo:</b> ${tipoClase}</span>` +
         `<span class="field"><b>Hora:</b> ${hora}</span>` +
-        `<span class="field"><b>Veces hoy (${tipoClase}):</b> ${num}</span>`,
-        `+0.2 puntos · Total hoy: ${totalPtsHoy.toFixed(1)} pts`);
-      beep(1318);
+        `<span class="field"><b>Veces hoy (${etiqueta.toLowerCase()}, ${tipoClase}):</b> ${num}</span>`,
+        `+${valor} · Total hoy: ${totalPtsHoy}`
+      );
+      beep(esEval ? 1400 : 1318);
       return;
     }
   }
