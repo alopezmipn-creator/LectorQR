@@ -294,7 +294,38 @@
 /* Chip E en el historial */
 .history .tipo.E { background: #ea580c; }
 
- 
+/* Campo de etiqueta */
+.etiqueta-field { margin-top: 10px; }
+.etiqueta-field input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.etiqueta-field input:focus { border-color: #5D1A99; }
+.etiqueta-field input::placeholder { color: #64748b; }
+
+/* Chip de etiqueta en el historial */
+.history .info .etq {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: #5D1A99;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  color: #fff;
+  letter-spacing: 0.3px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+} 
 </style>
 </head>
 <body>
@@ -352,6 +383,13 @@
     Evaluación
   </label>
 </div>
+
+<div class="mode-field etiqueta-field">
+  <label for="etiquetaInput">Etiqueta (opcional)</label>
+  <input type="text" id="etiquetaInput"
+         placeholder="Ej. Participación tema 3, Evaluación parcial…"
+         maxlength="80">
+</div>
    
     <div class="stats">
       <div class="stat"><b id="statA">0</b><span>ASISTENCIAS</span></div>
@@ -398,7 +436,7 @@
   // ============================================================
   // CONFIGURACIÓN
   // ============================================================
-  const API_URL = 'https://script.google.com/macros/s/AKfycbwY8OCxaIHP_6EeOJ6Hd4fKPjl6PHYXQY5mQb49ScKTToSQItFgvi56DTvxsKYUbnstxw/exec'; // ← tu URL
+  const API_URL = 'https://script.google.com/macros/s/AKfy.../exec'; // ← tu URL
   const STORAGE_KEY = 'qr_registros_v1';
   const COOLDOWN_MS = 3000;
   const RESULT_VISIBLE_MS = 3500;
@@ -431,6 +469,7 @@
   const fallbackInfo      = document.getElementById('fallbackInfo');
   const valorSelect       = document.getElementById('valorSelect');
   const esEvaluacion      = document.getElementById('esEvaluacion');
+  const etiquetaInput     = document.getElementById('etiquetaInput');
 
   // ============================================================
   // ESTADO
@@ -460,6 +499,11 @@
            String(d.getSeconds()).padStart(2, '0');
   }
   function fmtHora(iso) { return iso.slice(0, 5); }
+  function escHTML(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
 
   function beep(freq) {
     try {
@@ -497,7 +541,6 @@
     const asis = deHoy.filter(r => r.tipo === 'A').length;
     const part = deHoy.filter(r => r.tipo === 'P').length;
     const evalCount = deHoy.filter(r => r.tipo === 'E').length;
-    // Suma de los valores de participaciones y evaluaciones
     const pts = deHoy
       .filter(r => r.tipo === 'P' || r.tipo === 'E')
       .reduce((s, r) => s + (Number(r.valor) || 0), 0);
@@ -531,16 +574,19 @@
     }
 
     historyList.innerHTML = recientes.map(r => {
-      const esParticipacion = (r.tipo === 'P' || r.tipo === 'E');
-      const puntosTxt = esParticipacion ? `+${r.valor}` : '—';
+      const esPart = (r.tipo === 'P' || r.tipo === 'E');
+      const puntosTxt = esPart ? `+${r.valor}` : '—';
       const tc = r.tipo_clase || 'Teoría';
+      const etq = r.etiqueta
+        ? `<span class="etq" title="${escHTML(r.etiqueta)}">${escHTML(r.etiqueta)}</span>`
+        : '';
       return `
         <li>
           <div class="tipo ${r.tipo}">${r.tipo}</div>
           <div class="info">
-            <div class="n">${r.nombre || r.matricula}</div>
-            <div class="d">${fmtHora(r.hora)} · ${r.grupo || ''} · Boleta ${r.matricula}</div>
-            <span class="tc">${tc}</span>
+            <div class="n">${escHTML(r.nombre || r.matricula)}</div>
+            <div class="d">${fmtHora(r.hora)} · ${escHTML(r.grupo || '')} · Boleta ${escHTML(r.matricula)}</div>
+            <span class="tc">${escHTML(tc)}</span>${etq}
           </div>
           <div class="pts">${puntosTxt}</div>
         </li>
@@ -763,7 +809,7 @@
     if (!parsed) {
       setStatus('QR no reconocido: ' + text, 'error');
       mostrarTarjeta('error', 'ERROR', 'Código no reconocido', null,
-        `<span class="field">Contenido: ${text}</span>`, '');
+        `<span class="field">Contenido: ${escHTML(text)}</span>`, '');
       beep(300);
       return;
     }
@@ -822,6 +868,7 @@
         curso: alumno.curso,
         tipo_clase: tipoClase,
         tipo: 'A',
+        etiqueta: '',
         valor: 0
       };
       registros.push(reg);
@@ -845,7 +892,12 @@
       const esEval = esEvaluacion.checked;
       const tipoFinal = esEval ? 'E' : 'P';
       const valor = Number(valorSelect.value) || 10;
-      const etiqueta = esEval ? 'Evaluación' : 'Participación';
+      const etiqueta = (etiquetaInput.value || '').trim();
+      const etiquetaMostrar = etiqueta ? ` · ${etiqueta}` : '';
+      const etiquetaExtra = etiqueta
+        ? `<span class="field"><b>Etiqueta:</b> ${escHTML(etiqueta)}</span>`
+        : '';
+      const etiqueta = etiquetaInput.value.trim(); // eslint-disable-line no-redeclare
 
       const previasHoy = registros.filter(r =>
         r.fecha === fecha && r.matricula === boleta &&
@@ -861,6 +913,7 @@
         curso: alumno.curso,
         tipo_clase: tipoClase,
         tipo: tipoFinal,
+        etiqueta: etiqueta,
         valor: valor
       };
       registros.push(reg);
@@ -873,16 +926,18 @@
                       num === 3 ? 'tercera' :
                       num + 'ª';
       const totalPtsHoy = previasHoy.reduce((s, r) => s + (Number(r.valor) || 0), 0) + valor;
+      const nombreEtiqueta = esEval ? 'Evaluación' : 'Participación';
 
-      setStatus(`✓ ${etiqueta} ${ordinal} (${tipoClase}) vez: ${alumno.nombre} (+${valor})`);
+      setStatus(`✓ ${nombreEtiqueta} ${ordinal} (${tipoClase})${etiquetaMostrar}: ${alumno.nombre} (+${valor})`);
       mostrarTarjeta(
         esEval ? 'warning' : 'participation',
-        etiqueta.toUpperCase(),
-        `${etiqueta} ${ordinal} vez`,
+        nombreEtiqueta.toUpperCase(),
+        `${nombreEtiqueta} ${ordinal} vez`,
         { boleta, nombre: alumno.nombre, grupo: alumno.grupo, curso: alumno.curso },
         `<span class="field"><b>Tipo:</b> ${tipoClase}</span>` +
         `<span class="field"><b>Hora:</b> ${hora}</span>` +
-        `<span class="field"><b>Veces hoy (${etiqueta.toLowerCase()}, ${tipoClase}):</b> ${num}</span>`,
+        `<span class="field"><b>Veces hoy (${nombreEtiqueta.toLowerCase()}, ${tipoClase}):</b> ${num}</span>` +
+        etiquetaExtra,
         `+${valor} · Total hoy: ${totalPtsHoy}`
       );
       beep(esEval ? 1400 : 1318);
@@ -1025,5 +1080,6 @@
   cargarAlumnos();
 })();
 </script>
+ 
 </body>
 </html>
