@@ -326,6 +326,57 @@
   white-space: nowrap;
   vertical-align: middle;
 } 
+
+
+ /* Valor editable en el historial */
+.history .pts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 70px;
+}
+.history .valor-input {
+  width: 58px;
+  padding: 4px 6px;
+  background: #0f172a;
+  color: #fff;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: right;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.history .valor-input:focus { border-color: #5D1A99; }
+.history .valor-input.invalid {
+  border-color: #dc2626;
+  background: #450a0a;
+  color: #fca5a5;
+}
+
+/* Botón eliminar */
+.history .del-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.history .del-btn:hover {
+  background: #dc2626;
+  color: #fff;
+}
+ 
 </style>
 </head>
 <body>
@@ -436,7 +487,7 @@
   // ============================================================
   // CONFIGURACIÓN
   // ============================================================
-  const API_URL = 'https://script.google.com/macros/s/AKfycbxErGjEYdWp72vV3dKRsgOwVRkIAhLK9MXTZGjgJl66vSa44ABKlHw5UMw6q_uZbH2Bpw/exec'; // ← tu URL
+  const API_URL = 'https://script.google.com/macros/s/AKfy.../exec'; // ← tu URL
   const STORAGE_KEY = 'qr_registros_v1';
   const COOLDOWN_MS = 3000;
   const RESULT_VISIBLE_MS = 3500;
@@ -504,6 +555,13 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  function nuevoId() {
+    return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+  function claveRegistro(r) {
+    if (!r.id) r.id = nuevoId();
+    return r.id;
+  }
 
   function beep(freq) {
     try {
@@ -526,7 +584,10 @@
   function cargarRegistros() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : [];
+      const arr = raw ? JSON.parse(raw) : [];
+      // Asegurar que todos tengan id
+      arr.forEach(r => { if (!r.id) r.id = nuevoId(); });
+      return arr;
     } catch (e) { return []; }
   }
   function guardarRegistros(regs) {
@@ -559,7 +620,7 @@
   }
 
   // ============================================================
-  // HISTORIAL
+  // HISTORIAL (con input editable y botón eliminar)
   // ============================================================
   function renderHistorial() {
     const hoyStr = hoy();
@@ -575,23 +636,73 @@
 
     historyList.innerHTML = recientes.map(r => {
       const esPart = (r.tipo === 'P' || r.tipo === 'E');
-      const puntosTxt = esPart ? `+${r.valor}` : '—';
+      const id = claveRegistro(r);
+      const valorTxt = esPart
+        ? `<input type="text" class="valor-input" data-id="${id}"
+                  value="${r.valor}" inputmode="decimal" autocomplete="off">`
+        : '—';
       const tc = r.tipo_clase || 'Teoría';
       const etq = r.etiqueta
         ? `<span class="etq" title="${escHTML(r.etiqueta)}">${escHTML(r.etiqueta)}</span>`
         : '';
       return `
-        <li>
+        <li data-id="${id}">
           <div class="tipo ${r.tipo}">${r.tipo}</div>
           <div class="info">
             <div class="n">${escHTML(r.nombre || r.matricula)}</div>
             <div class="d">${fmtHora(r.hora)} · ${escHTML(r.grupo || '')} · Boleta ${escHTML(r.matricula)}</div>
             <span class="tc">${escHTML(tc)}</span>${etq}
           </div>
-          <div class="pts">${puntosTxt}</div>
+          <div class="pts">${valorTxt}</div>
+          <button class="del-btn" data-id="${id}" title="Eliminar registro">✕</button>
         </li>
       `;
     }).join('');
+
+    // --- Inputs de valor ---
+    historyList.querySelectorAll('.valor-input').forEach(inp => {
+      inp.addEventListener('change', e => {
+        const id = e.target.dataset.id;
+        const bruto = e.target.value.trim().replace(',', '.');
+        const num = Number(bruto);
+
+        if (bruto === '' || isNaN(num) || num < 0) {
+          e.target.classList.add('invalid');
+          e.target.value = '0';
+          const rec = registros.find(r => r.id === id);
+          if (rec) { rec.valor = 0; guardarRegistros(registros); actualizarStats(); }
+          return;
+        }
+        e.target.classList.remove('invalid');
+        e.target.value = num;
+        const rec = registros.find(r => r.id === id);
+        if (rec) {
+          rec.valor = num;
+          guardarRegistros(registros);
+          actualizarStats();
+        }
+      });
+
+      // Enter = blur
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') e.target.blur();
+      });
+    });
+
+    // --- Botones eliminar ---
+    historyList.querySelectorAll('.del-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const id = e.currentTarget.dataset.id;
+        const rec = registros.find(r => r.id === id);
+        if (!rec) return;
+        const desc = `${rec.nombre || rec.matricula} · ${rec.tipo} · ${fmtHora(rec.hora)}`;
+        if (!confirm(`¿Eliminar este registro?\n\n${desc}`)) return;
+        registros = registros.filter(r => r.id !== id);
+        guardarRegistros(registros);
+        actualizarStats();
+        renderHistorial();
+      });
+    });
   }
 
   // ============================================================
@@ -684,51 +795,46 @@
   }
 
   async function cargarAlumnos() {
-  try {
-    // Guardas de seguridad + diagnóstico
-    if (driveStatus) {
-      driveStatus.textContent = 'Cargando alumnos desde Drive…';
-      driveStatus.style.color = '#94a3b8';
-    }
-    if (fallbackUpload) fallbackUpload.style.display = 'none';
-    if (fallbackInfo)   fallbackInfo.textContent = '';
+    try {
+      if (driveStatus) {
+        driveStatus.textContent = 'Cargando alumnos desde Drive…';
+        driveStatus.style.color = '#94a3b8';
+      }
+      if (fallbackUpload) fallbackUpload.style.display = 'none';
+      if (fallbackInfo)   fallbackInfo.textContent = '';
 
-    console.log('[QR] Consultando obtenerAlumnos…');
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Tiempo de espera agotado (12s)')), DRIVE_TIMEOUT_MS)
+      );
+      const res = await Promise.race([
+        llamarAppsScript('obtenerAlumnos', {}),
+        timeoutPromise
+      ]);
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Tiempo de espera agotado (12s)')), DRIVE_TIMEOUT_MS)
-    );
+      if (!res) throw new Error('Respuesta vacía de Apps Script');
+      if (!res.ok) throw new Error(res.error || 'ok=false sin mensaje');
+      if (!res.csv) throw new Error('La respuesta no contiene CSV');
 
-    const res = await Promise.race([
-      llamarAppsScript('obtenerAlumnos', {}),
-      timeoutPromise
-    ]);
+      const info = aplicarCSV(res.csv, 'Drive');
+      if (driveStatus) {
+        driveStatus.textContent = `✓ ${info.count} alumnos cargados · ${res.fileName || ''}`;
+        driveStatus.style.color = '#4ade80';
+      }
+      if (fallbackUpload) fallbackUpload.style.display = 'none';
 
-    console.log('[QR] Respuesta de Apps Script:', res);
-
-    if (!res) throw new Error('Respuesta vacía de Apps Script');
-    if (!res.ok) throw new Error(res.error || 'ok=false sin mensaje');
-    if (!res.csv) throw new Error('La respuesta no contiene CSV');
-
-    const info = aplicarCSV(res.csv, 'Drive');
-    if (driveStatus) {
-      driveStatus.textContent = `✓ ${info.count} alumnos cargados · ${res.fileName || ''}`;
-      driveStatus.style.color = '#4ade80';
-    }
-    if (fallbackUpload) fallbackUpload.style.display = 'none';
-  } catch (err) {
-    console.error('[QR] Error cargando alumnos:', err);
-    if (driveStatus) {
-      driveStatus.textContent = '⚠ No se pudo cargar alumnos desde Drive: ' + err.message;
-      driveStatus.style.color = '#f87171';
-    }
-    if (fallbackUpload) fallbackUpload.style.display = 'block';
-    if (fallbackInfo) {
-      fallbackInfo.classList.remove('error', 'ok');
-      fallbackInfo.textContent = 'Usa el botón para cargar el CSV manualmente.';
+    } catch (err) {
+      console.error('[QR] Error cargando alumnos:', err);
+      if (driveStatus) {
+        driveStatus.textContent = '⚠ No se pudo cargar alumnos desde Drive: ' + err.message;
+        driveStatus.style.color = '#f87171';
+      }
+      if (fallbackUpload) fallbackUpload.style.display = 'block';
+      if (fallbackInfo) {
+        fallbackInfo.classList.remove('error', 'ok');
+        fallbackInfo.textContent = 'Usa el botón para cargar el CSV manualmente.';
+      }
     }
   }
-}
 
   // ============================================================
   // FALLBACK: CARGAR CSV MANUALMENTE
@@ -877,6 +983,7 @@
       }
 
       const reg = {
+        id: nuevoId(),
         fecha, hora,
         matricula: boleta,
         nombre: alumno.nombre,
@@ -913,6 +1020,7 @@
       const etiquetaExtra = etiqueta
         ? `<span class="field"><b>Etiqueta:</b> ${escHTML(etiqueta)}</span>`
         : '';
+      const nombreEtiqueta = esEval ? 'Evaluación' : 'Participación';
 
       const previasHoy = registros.filter(r =>
         r.fecha === fecha && r.matricula === boleta &&
@@ -921,6 +1029,7 @@
       const num = previasHoy.length + 1;
 
       const reg = {
+        id: nuevoId(),
         fecha, hora,
         matricula: boleta,
         nombre: alumno.nombre,
@@ -941,7 +1050,6 @@
                       num === 3 ? 'tercera' :
                       num + 'ª';
       const totalPtsHoy = previasHoy.reduce((s, r) => s + (Number(r.valor) || 0), 0) + valor;
-      const nombreEtiqueta = esEval ? 'Evaluación' : 'Participación';
 
       setStatus(`✓ ${nombreEtiqueta} ${ordinal} (${tipoClase})${etiquetaMostrar}: ${alumno.nombre} (+${valor})`);
       mostrarTarjeta(
@@ -1046,11 +1154,46 @@
   }
 
   // ============================================================
-  // SUBIR REGISTROS A DRIVE
+  // SUBIR REGISTROS A DRIVE (con validación de valores)
   // ============================================================
   uploadBtn.addEventListener('click', async () => {
     if (!registros.length) return;
 
+    // --- Validar que P/E tengan valor > 0 ---
+    const invalidos = registros.filter(r =>
+      (r.tipo === 'P' || r.tipo === 'E') && !(Number(r.valor) > 0)
+    );
+
+    if (invalidos.length > 0) {
+      // Marcar visualmente los inputs inválidos (si están visibles)
+      invalidos.forEach(r => {
+        const id = claveRegistro(r);
+        const inp = historyList.querySelector(`.valor-input[data-id="${id}"]`);
+        if (inp) inp.classList.add('invalid');
+      });
+
+      const ejemplo = invalidos.slice(0, 3).map(r =>
+        `· ${r.nombre || r.matricula} (${r.tipo} ${fmtHora(r.hora)}) → valor=${r.valor}`
+      ).join('\n');
+      const restantes = invalidos.length > 3 ? `\n… y ${invalidos.length - 3} más.` : '';
+
+      alert(
+        `No se puede subir a Drive.\n\n` +
+        `${invalidos.length} registro(s) de participación/evaluación tienen valor 0 o vacío.\n\n` +
+        `Edítalos en "Últimos escaneos" antes de subir:\n\n${ejemplo}${restantes}`
+      );
+
+      // Si están visibles, marcar en rojo y hacer scroll al primero
+      const primerInp = historyList.querySelector('.valor-input.invalid');
+      if (primerInp) {
+        primerInp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        primerInp.focus();
+        primerInp.select();
+      }
+      return;
+    }
+
+    // --- Subida normal ---
     uploadBtn.disabled = true;
     const textoOriginal = uploadBtn.textContent;
     uploadBtn.textContent = 'Subiendo…';
