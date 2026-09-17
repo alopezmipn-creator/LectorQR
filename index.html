@@ -684,35 +684,51 @@
   }
 
   async function cargarAlumnos() {
-    driveStatus.textContent = 'Cargando alumnos desde Drive…';
-    driveStatus.style.color = '#94a3b8';
-    fallbackUpload.style.display = 'none';
-    fallbackInfo.textContent = '';
+  try {
+    // Guardas de seguridad + diagnóstico
+    if (driveStatus) {
+      driveStatus.textContent = 'Cargando alumnos desde Drive…';
+      driveStatus.style.color = '#94a3b8';
+    }
+    if (fallbackUpload) fallbackUpload.style.display = 'none';
+    if (fallbackInfo)   fallbackInfo.textContent = '';
 
-    try {
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Tiempo de espera agotado')), DRIVE_TIMEOUT_MS)
-      );
-      const res = await Promise.race([
-        llamarAppsScript('obtenerAlumnos', {}),
-        timeoutPromise
-      ]);
+    console.log('[QR] Consultando obtenerAlumnos…');
 
-      if (!res.ok) throw new Error(res.error);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Tiempo de espera agotado (12s)')), DRIVE_TIMEOUT_MS)
+    );
 
-      const info = aplicarCSV(res.csv, 'Drive');
-      driveStatus.textContent = `✓ ${info.count} alumnos cargados · ${res.fileName}`;
+    const res = await Promise.race([
+      llamarAppsScript('obtenerAlumnos', {}),
+      timeoutPromise
+    ]);
+
+    console.log('[QR] Respuesta de Apps Script:', res);
+
+    if (!res) throw new Error('Respuesta vacía de Apps Script');
+    if (!res.ok) throw new Error(res.error || 'ok=false sin mensaje');
+    if (!res.csv) throw new Error('La respuesta no contiene CSV');
+
+    const info = aplicarCSV(res.csv, 'Drive');
+    if (driveStatus) {
+      driveStatus.textContent = `✓ ${info.count} alumnos cargados · ${res.fileName || ''}`;
       driveStatus.style.color = '#4ade80';
-      fallbackUpload.style.display = 'none';
-
-    } catch (err) {
+    }
+    if (fallbackUpload) fallbackUpload.style.display = 'none';
+  } catch (err) {
+    console.error('[QR] Error cargando alumnos:', err);
+    if (driveStatus) {
       driveStatus.textContent = '⚠ No se pudo cargar alumnos desde Drive: ' + err.message;
       driveStatus.style.color = '#f87171';
-      fallbackUpload.style.display = 'block';
+    }
+    if (fallbackUpload) fallbackUpload.style.display = 'block';
+    if (fallbackInfo) {
       fallbackInfo.classList.remove('error', 'ok');
       fallbackInfo.textContent = 'Usa el botón para cargar el CSV manualmente.';
     }
   }
+}
 
   // ============================================================
   // FALLBACK: CARGAR CSV MANUALMENTE
@@ -897,7 +913,6 @@
       const etiquetaExtra = etiqueta
         ? `<span class="field"><b>Etiqueta:</b> ${escHTML(etiqueta)}</span>`
         : '';
-      const etiqueta = etiquetaInput.value.trim(); // eslint-disable-line no-redeclare
 
       const previasHoy = registros.filter(r =>
         r.fecha === fecha && r.matricula === boleta &&
